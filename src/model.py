@@ -6,7 +6,6 @@ from tensorflow.keras import layers, models, regularizers
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from tensorflow.keras.metrics import Precision, Recall
 
-
 # =========================
 #       MODEL CREATION
 # =========================
@@ -39,7 +38,7 @@ def create_model(input_shape=(224, 224, 3), l2_factor=0.0001, dropout_rate=0.3):
     model = models.Model(inputs, outputs)
 
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e4),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
         loss="binary_crossentropy",
         metrics=[
             "accuracy",
@@ -67,7 +66,7 @@ def train_model(model, train_generator, validation_generator, epochs, model_path
     )
 
     if fine_tune:
-        print("Starting fine tuning")
+        print("Starting fine-tuning...")
 
         # Unfreeze top layers of the VGG16 base
         base = model.layers[1] if isinstance(model.layers[1], tf.keras.Model) else None
@@ -77,7 +76,7 @@ def train_model(model, train_generator, validation_generator, epochs, model_path
                 layer.trainable = False
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e5),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
             loss="binary_crossentropy",
             metrics=[
                 "accuracy",
@@ -105,11 +104,29 @@ def train_model(model, train_generator, validation_generator, epochs, model_path
 #       SAVE and LOAD
 # =========================
 def save_model(model, path):
+    """
+    Save model as .keras file for Keras 3 compatibility.
+    """
+    if not path.endswith(".keras"):
+        path += ".keras"
     model.save(path)
     print("Model saved at", path)
+    return path
 
 
 def load_trained_model(path):
+    """
+    Load a model saved as .keras or .h5 file.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Model file not found: {path}")
+
+    if not (path.endswith(".keras") or path.endswith(".h5")):
+        raise ValueError(
+            "Keras 3 only supports V3 `.keras` files or legacy `.h5` files. "
+            f"Given: {path}"
+        )
+
     model = tf.keras.models.load_model(path)
     print("Loaded model from", path)
     return model
@@ -129,9 +146,8 @@ def retrain_model(
     """
     Retrains the model using new uploaded data.
     Merges new images with existing training data.
-    Fine tunes only top layers.
-    Saves a new version with a timestamp.
-    Returns model_path and history for evaluation.
+    Saves a new version with timestamp.
+    Returns model_path and history.
     """
     print("Starting retraining process")
 
