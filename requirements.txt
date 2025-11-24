@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+opencv-python-headless
+matplotlib
+seaborn
+requests
+torch
+torchvision
+Pillow
+fastapi
+uvicorn
