@@ -19,19 +19,22 @@ from src.model import load_trained_model, retrain_model
 from src.preprocessing import create_data_generators
 
 # -----------------------
-# Directories setup
+# Directories setup (root-level)
 # -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "data", "new_uploads"))
-MODELS_DIR = os.environ.get("MODELS_DIR", os.path.join(BASE_DIR, "models"))
-TEST_DIR = os.environ.get("TEST_DIR", os.path.join(BASE_DIR, "data", "test"))
-TRAIN_DIR = os.path.join(BASE_DIR, "data", "train")  # default train folder
-
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(TEST_DIR, exist_ok=True)
+# Data folders
+DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
+TRAIN_DIR = os.path.join(DATA_DIR, "train")
+TEST_DIR = os.path.join(DATA_DIR, "test")
+UPLOAD_DIR = os.path.join(DATA_DIR, "new_uploads")
 os.makedirs(TRAIN_DIR, exist_ok=True)
+os.makedirs(TEST_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Models folder
+MODELS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "models"))
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 # -----------------------
 # FastAPI app
@@ -108,7 +111,6 @@ def _get_model_to_use():
         if os.path.exists(model_path):
             return model_path
         else:
-            # Selected model doesn't exist, fall back to latest
             SELECTED_MODEL = None
 
     return _get_latest_model_file()
@@ -127,9 +129,7 @@ def health():
 # -----------------------
 @app.get("/models")
 def list_models():
-    """Get list of all available models"""
     global SELECTED_MODEL
-
     try:
         all_files = os.listdir(MODELS_DIR) if os.path.exists(MODELS_DIR) else []
         model_files = [
@@ -148,10 +148,7 @@ def list_models():
             "currently_selected": SELECTED_MODEL
         }
     except Exception as e:
-        return {
-            "error": str(e),
-            "models_directory": MODELS_DIR
-        }
+        return {"error": str(e), "models_directory": MODELS_DIR}
 
 
 # -----------------------
@@ -159,7 +156,6 @@ def list_models():
 # -----------------------
 @app.post("/select-model")
 def select_model(model_name: str):
-    """Select a specific model to use for all operations"""
     global SELECTED_MODEL
 
     model_path = os.path.join(MODELS_DIR, model_name)
@@ -184,7 +180,6 @@ def select_model(model_name: str):
 # -----------------------
 @app.get("/download-model/{model_name}")
 def download_model(model_name: str):
-    """Download a specific model file"""
     model_path = os.path.join(MODELS_DIR, model_name)
 
     if not os.path.exists(model_path):
@@ -202,7 +197,6 @@ def download_model(model_name: str):
 # -----------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """Upload a single image file and get prediction."""
     model_file = _get_model_to_use()
     print(f"Using model: {model_file}")
 
@@ -239,7 +233,6 @@ async def predict(file: UploadFile = File(...)):
 # -----------------------
 @app.post("/upload")
 async def upload(files: List[UploadFile] = File(...)):
-    """Accept multiple files or zipped folders for retraining"""
     _clear_folder(UPLOAD_DIR)
     saved = []
     for upload_file in files:
