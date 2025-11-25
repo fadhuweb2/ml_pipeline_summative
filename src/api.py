@@ -7,7 +7,7 @@ import gc
 from typing import List, Optional
 import warnings
 from pathlib import Path
-
+import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 import uvicorn
@@ -22,16 +22,14 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.applications.vgg16 import preprocess_input
 
-# Project modules (keep predict_image helper if you use it elsewhere)
+# Project modules
 from src.model import load_trained_model, retrain_model
 from src.preprocessing import create_data_generators
 
 # -----------------------
-# Directories setup (root-level)
+# Directories setup
 # -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Data folders (root/data)
 DATA_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "data"))
 TRAIN_DIR = os.path.join(DATA_DIR, "train")
 TEST_DIR = os.path.join(DATA_DIR, "test")
@@ -40,11 +38,9 @@ os.makedirs(TRAIN_DIR, exist_ok=True)
 os.makedirs(TEST_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Models folder (root/models)
 MODELS_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "models"))
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# Default input image size used by your prediction pipeline
 DEFAULT_INPUT_SIZE = (224, 224)
 
 # -----------------------
@@ -98,11 +94,8 @@ def _list_valid_models():
 
 
 def _get_latest_keras_model_file():
-    """Return the latest .keras or .h5 file or None."""
     all_files = _list_model_files()
-    model_files = [
-        f for f in all_files if os.path.isfile(os.path.join(MODELS_DIR, f)) and (f.endswith(".keras") or f.endswith(".h5"))
-    ]
+    model_files = [f for f in all_files if f.endswith(".keras") or f.endswith(".h5")]
     if not model_files:
         return None
     model_files_with_time = [(f, os.path.getmtime(os.path.join(MODELS_DIR, f))) for f in model_files]
@@ -111,9 +104,8 @@ def _get_latest_keras_model_file():
 
 
 def _get_latest_tflite_file():
-    """Return latest tflite/lite file if exists."""
     all_files = _list_model_files()
-    model_files = [f for f in all_files if os.path.isfile(os.path.join(MODELS_DIR, f)) and (f.endswith(".tflite") or f.endswith(".lite"))]
+    model_files = [f for f in all_files if f.endswith(".tflite") or f.endswith(".lite")]
     if not model_files:
         return None
     model_files_with_time = [(f, os.path.getmtime(os.path.join(MODELS_DIR, f))) for f in model_files]
@@ -122,7 +114,6 @@ def _get_latest_tflite_file():
 
 
 def _get_latest_model_file():
-    """Prefer tflite if present, otherwise return latest keras/h5."""
     tflite_file = _get_latest_tflite_file()
     if tflite_file:
         return tflite_file
@@ -133,35 +124,22 @@ def _get_latest_model_file():
 
 
 def convert_keras_to_tflite(keras_model_path: str, tflite_output_path: str):
-    """
-    Convert a Keras model file to TFLite. This will load the keras model so use carefully.
-    Returns path to saved tflite file.
-    """
-    # Load Keras model (may be memory heavy)
     keras_model = tf.keras.models.load_model(keras_model_path)
     converter = tf.lite.TFLiteConverter.from_keras_model(keras_model)
-    # Use default optimizations; you can enable optimizations for smaller size
     converter.optimizations = [tf.lite.Optimize.DEFAULT]
     tflite_model = converter.convert()
-
     with open(tflite_output_path, "wb") as f:
         f.write(tflite_model)
-
-    # cleanup
     del keras_model
     gc.collect()
     try:
         tf.keras.backend.clear_session()
     except Exception:
         pass
-
     return tflite_output_path
 
 
 def load_tflite_interpreter(tflite_path: str):
-    """
-    Load a tf.lite.Interpreter and return interpreter and its input/output metadata
-    """
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
@@ -170,10 +148,6 @@ def load_tflite_interpreter(tflite_path: str):
 
 
 def preprocess_image_for_model(image_path: str, target_size=DEFAULT_INPUT_SIZE):
-    """
-    Preprocess image to match the model expected input (VGG16 preprocessing used in src.prediction).
-    Returns a float32 numpy array shaped for model input
-    """
     img = load_img(image_path, target_size=target_size)
     x = img_to_array(img)
     x = np.expand_dims(x, axis=0)
@@ -182,25 +156,17 @@ def preprocess_image_for_model(image_path: str, target_size=DEFAULT_INPUT_SIZE):
 
 
 def predict_with_tflite(interpreter, input_details, output_details, image_path: str, threshold: float = 0.5):
-    """
-    Run the tflite interpreter on a single preprocessed image file.
-    Returns the same dict shape as your previous predict helper.
-    """
-    arr = preprocess_image_for_model(image_path, target_size=DEFAULT_INPUT_SIZE)  # shape (1,H,W,3)
-    # Some TFLite models require input dtype casting
+    arr = preprocess_image_for_model(image_path, target_size=DEFAULT_INPUT_SIZE)
     input_dtype = input_details[0]["dtype"]
     if input_dtype == np.float32:
         input_data = arr.astype(np.float32)
     elif input_dtype == np.uint8:
-        # If quantized, rescale or cast as needed. Here we cast directly.
-        input_data = (arr).astype(np.uint8)
+        input_data = arr.astype(np.uint8)
     else:
         input_data = arr.astype(input_dtype)
-
     interpreter.set_tensor(input_details[0]["index"], input_data)
     interpreter.invoke()
     output_data = interpreter.get_tensor(output_details[0]["index"])
-    # assume binary prob in output_data[0][0]
     prob = float(output_data[0][0])
     label = "PNEUMONIA" if prob > threshold else "NORMAL"
     confidence = prob if prob > threshold else 1.0 - prob
@@ -208,7 +174,7 @@ def predict_with_tflite(interpreter, input_details, output_details, image_path: 
 
 
 # -----------------------
-# Startup: choose model and load interpreter
+# Startup: load model
 # -----------------------
 def _startup_load_model():
     global GLOBAL_TFLITE_INTERPRETER, GLOBAL_TFLITE_INPUT_DETAILS, GLOBAL_TFLITE_OUTPUT_DETAILS, GLOBAL_MODEL_PATH
@@ -216,16 +182,12 @@ def _startup_load_model():
     try:
         model_candidate = _get_latest_model_file()
     except FileNotFoundError as e:
-        # no model at all; just log and return
         print("Startup: no model file found:", str(e))
-        GLOBAL_TFLITE_INTERPRETER = None
-        GLOBAL_MODEL_PATH = None
         return
 
     model_candidate = str(model_candidate)
     print("Startup: chosen model candidate:", model_candidate)
 
-    # if candidate is tflite, load interpreter
     if model_candidate.endswith(".tflite") or model_candidate.endswith(".lite"):
         try:
             interpreter, in_det, out_det = load_tflite_interpreter(model_candidate)
@@ -238,7 +200,6 @@ def _startup_load_model():
         except Exception as e:
             print("Failed to load TFLite interpreter at startup:", str(e))
 
-    # if it's a Keras file, attempt to find or produce a tflite sibling
     if model_candidate.endswith(".keras") or model_candidate.endswith(".h5"):
         base = os.path.splitext(os.path.basename(model_candidate))[0]
         tflite_sibling = os.path.join(MODELS_DIR, f"{base}.tflite")
@@ -254,7 +215,6 @@ def _startup_load_model():
             except Exception as e:
                 print("Failed to load existing tflite sibling:", str(e))
 
-        # try converting Keras to tflite now
         try:
             print("Converting Keras model to TFLite at startup. This may be memory heavy.")
             convert_keras_to_tflite(model_candidate, tflite_sibling)
@@ -266,50 +226,40 @@ def _startup_load_model():
             print("Conversion complete and tflite loaded:", tflite_sibling)
             return
         except Exception as e:
-            print("Conversion from Keras to TFLite failed at startup:", str(e))
-            # as a last resort try to load the keras model into memory to support predictions
+            print("Conversion failed:", str(e))
             try:
-                print("Falling back to loading Keras model into memory (may OOM).")
                 keras_model = tf.keras.models.load_model(model_candidate)
-                # create a tiny wrapper that mimics the predict function used earlier
                 def keras_predict_wrapper(image_path: str, threshold=0.5):
                     arr = preprocess_image_for_model(image_path, target_size=DEFAULT_INPUT_SIZE)
                     prob = float(keras_model.predict(arr)[0][0])
                     label = "PNEUMONIA" if prob > threshold else "NORMAL"
                     confidence = prob if prob > threshold else 1.0 - prob
                     return {"label": label, "confidence": float(confidence), "probability": prob}
-                # store as special interpreter: we set GLOBAL_TFLITE_INTERPRETER to callable wrapper
                 GLOBAL_TFLITE_INTERPRETER = keras_predict_wrapper
                 GLOBAL_TFLITE_INPUT_DETAILS = None
                 GLOBAL_TFLITE_OUTPUT_DETAILS = None
                 GLOBAL_MODEL_PATH = model_candidate
-                print("Keras model loaded in-memory as fallback:", model_candidate)
+                print("Keras model loaded as fallback:", model_candidate)
                 return
             except Exception as e2:
-                print("Failed to load keras fallback model:", str(e2))
+                print("Failed to load keras fallback:", str(e2))
 
-    # no model loaded
     print("Startup finished but no usable model loaded.")
 
 
-# Run startup routine
 _startup_load_model()
 
 
 # -----------------------
-# Health check
+# Routes
 # -----------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "timestamp": time.time(), "model_in_use": GLOBAL_MODEL_PATH}
 
 
-# -----------------------
-# List available models
-# -----------------------
 @app.get("/models")
 def list_models():
-    global SELECTED_MODEL
     try:
         all_files = _list_model_files()
         valid = _list_valid_models()
@@ -329,18 +279,9 @@ def list_models():
         return {"error": str(e), "models_directory": MODELS_DIR}
 
 
-# -----------------------
-# Select model
-# -----------------------
 @app.post("/select-model")
 def select_model(model_name: str):
-    """
-    Pick a model file name in the models directory to become the active model.
-    If a tflite file is selected we will load the interpreter immediately.
-    If a keras file is selected we will try to load or convert it to tflite.
-    """
     global SELECTED_MODEL, GLOBAL_TFLITE_INTERPRETER, GLOBAL_TFLITE_INPUT_DETAILS, GLOBAL_TFLITE_OUTPUT_DETAILS, GLOBAL_MODEL_PATH
-
     model_path = os.path.join(MODELS_DIR, model_name)
     if not os.path.exists(model_path):
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found")
@@ -358,7 +299,6 @@ def select_model(model_name: str):
             raise HTTPException(status_code=500, detail=f"Failed to load tflite interpreter: {e}")
 
     if model_name.endswith(".keras") or model_name.endswith(".h5"):
-        # attempt to convert or load sibling tflite
         base = os.path.splitext(model_name)[0]
         tflite_sibling = os.path.join(MODELS_DIR, f"{base}.tflite")
         try:
@@ -370,7 +310,6 @@ def select_model(model_name: str):
                 GLOBAL_MODEL_PATH = tflite_sibling
                 SELECTED_MODEL = model_name
                 return {"status": "success", "selected_model": SELECTED_MODEL, "message": f"Using existing tflite sibling {os.path.basename(tflite_sibling)}"}
-            # convert
             convert_keras_to_tflite(model_path, tflite_sibling)
             interpreter, in_det, out_det = load_tflite_interpreter(tflite_sibling)
             GLOBAL_TFLITE_INTERPRETER = interpreter
@@ -385,9 +324,6 @@ def select_model(model_name: str):
     raise HTTPException(status_code=400, detail="Unsupported model format")
 
 
-# -----------------------
-# Download model
-# -----------------------
 @app.get("/download-model/{model_name}")
 def download_model(model_name: str):
     model_path = os.path.join(MODELS_DIR, model_name)
@@ -396,15 +332,8 @@ def download_model(model_name: str):
     return FileResponse(model_path, filename=model_name, media_type="application/octet-stream")
 
 
-# -----------------------
-# Predict single image
-# -----------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """
-    Predict using the preloaded TFLite interpreter or Keras fallback wrapper.
-    Model is loaded once at startup or when selected.
-    """
     if GLOBAL_TFLITE_INTERPRETER is None:
         raise HTTPException(status_code=503, detail="No model loaded. Upload or select a model first.")
 
@@ -418,9 +347,7 @@ async def predict(file: UploadFile = File(...)):
         f.write(content)
 
     try:
-        # if GLOBAL_TFLITE_INTERPRETER is a callable wrapper for Keras fallback
         if callable(GLOBAL_TFLITE_INTERPRETER) and GLOBAL_TFLITE_INPUT_DETAILS is None:
-            # Keras fallback wrapper expects image_path
             result = GLOBAL_TFLITE_INTERPRETER(tmp_path)
         else:
             result = predict_with_tflite(GLOBAL_TFLITE_INTERPRETER, GLOBAL_TFLITE_INPUT_DETAILS, GLOBAL_TFLITE_OUTPUT_DETAILS, tmp_path)
@@ -432,9 +359,6 @@ async def predict(file: UploadFile = File(...)):
     return JSONResponse(content=result)
 
 
-# -----------------------
-# Upload bulk files for retraining
-# -----------------------
 @app.post("/upload")
 async def upload(files: List[UploadFile] = File(...)):
     _clear_folder(UPLOAD_DIR)
@@ -448,9 +372,6 @@ async def upload(files: List[UploadFile] = File(...)):
     return {"status": "ok", "saved": saved, "upload_folder": UPLOAD_DIR}
 
 
-# -----------------------
-# Trigger retraining
-# -----------------------
 @app.post("/retrain")
 def trigger_retrain(epochs: int = 5, batch_size: int = 32, fine_tune: bool = True):
     if not os.path.exists(UPLOAD_DIR) or not os.listdir(UPLOAD_DIR):
@@ -464,13 +385,11 @@ def trigger_retrain(epochs: int = 5, batch_size: int = 32, fine_tune: bool = Tru
         output_directory=MODELS_DIR,
         fine_tune=fine_tune
     )
-    # After retrain, try to convert new keras model to tflite and reload interpreter
     try:
         base = os.path.splitext(os.path.basename(model_path))[0]
         tflite_path = os.path.join(MODELS_DIR, f"{base}.tflite")
         if model_path.endswith(".keras") or model_path.endswith(".h5"):
             convert_keras_to_tflite(model_path, tflite_path)
-            # reload interpreter to use new model
             interpreter, in_det, out_det = load_tflite_interpreter(tflite_path)
             global GLOBAL_TFLITE_INTERPRETER, GLOBAL_TFLITE_INPUT_DETAILS, GLOBAL_TFLITE_OUTPUT_DETAILS, GLOBAL_MODEL_PATH
             GLOBAL_TFLITE_INTERPRETER = interpreter
@@ -478,26 +397,20 @@ def trigger_retrain(epochs: int = 5, batch_size: int = 32, fine_tune: bool = Tru
             GLOBAL_TFLITE_OUTPUT_DETAILS = out_det
             GLOBAL_MODEL_PATH = tflite_path
     except Exception as e:
-        # conversion failure is non fatal for endpoint but log
         print("Warning: conversion after retrain failed:", str(e))
 
     summary = {k: v[-1] if isinstance(v, list) else v for k, v in history.history.items()}
     return {"status": "completed", "model_path": model_path, "summary": summary}
 
 
-# -----------------------
-# Model metrics endpoint
-# -----------------------
 @app.get("/metrics")
 def metrics(batch_size: int = 64):
-    import numpy as np
     from sklearn.metrics import precision_score, recall_score, roc_auc_score
 
     if GLOBAL_TFLITE_INTERPRETER is None:
         raise HTTPException(status_code=503, detail="No model loaded for evaluation.")
 
     try:
-        # create test generator
         _, _, test_gen = create_data_generators(
             train_dir=TRAIN_DIR,
             test_dir=TEST_DIR,
@@ -508,19 +421,19 @@ def metrics(batch_size: int = 64):
         raise HTTPException(status_code=500, detail=f"Failed to create test data generator: {str(e)}")
 
     try:
-        # If interpreter is keras fallback wrapper, we evaluate using the keras model loaded in wrapper
+        y_pred_probs = []
+        y_true = []
+
         if callable(GLOBAL_TFLITE_INTERPRETER) and GLOBAL_TFLITE_INPUT_DETAILS is None:
-            # wrapper uses an internal keras model; use it via predict on generator directly is tricky.
-            # To keep semantics consistent we will run predictions sample-by-sample through wrapper
-            y_pred_probs = []
-            y_true = []
+            import os
+            from PIL import Image
+            tmp_metric_dir = os.path.join(BASE_DIR, "tmp_metric")
+            os.makedirs(tmp_metric_dir, exist_ok=True)
             for i in range(len(test_gen)):
                 Xbatch, ybatch = test_gen[i]
                 for j in range(Xbatch.shape[0]):
-                    # save temp image file to pass to wrapper (inefficient but safe)
-                    tmp_img_path = os.path.join(BASE_DIR, "tmp_metric", f"{time.time_ns()}.jpg")
-                    from PIL import Image
-                    arr_uint8 = ((Xbatch[j] + 1.0) * 127.5).astype("uint8")  # inverse of preprocess_input approx
+                    tmp_img_path = os.path.join(tmp_metric_dir, f"{time.time_ns()}.jpg")
+                    arr_uint8 = ((Xbatch[j] + 1.0) * 127.5).astype("uint8")
                     Image.fromarray(arr_uint8).save(tmp_img_path)
                     res = GLOBAL_TFLITE_INTERPRETER(tmp_img_path)
                     y_pred_probs.append(res["probability"])
@@ -529,51 +442,34 @@ def metrics(batch_size: int = 64):
                         os.remove(tmp_img_path)
                     except Exception:
                         pass
-            import numpy as _np
-            y_pred_probs = _np.array(y_pred_probs)
-            y_pred = (y_pred_probs > 0.5).astype(int).flatten()
-            y_true = _np.array(y_true)
-            precision = round(float(precision_score(y_true, y_pred)), 4)
-            recall = round(float(recall_score(y_true, y_pred)), 4)
-            auc = round(float(roc_auc_score(y_true, y_pred_probs)), 4)
-            accuracy = round(float(_np.mean(y_pred == y_true)), 4)
-            loss = None
-            return {"loss": loss, "accuracy": accuracy, "precision": precision, "recall": recall, "auc": auc}
+            shutil.rmtree(tmp_metric_dir, ignore_errors=True)
+        else:
+            for i in range(len(test_gen)):
+                Xbatch, ybatch = test_gen[i]
+                for j in range(Xbatch.shape[0]):
+                    sample = Xbatch[j:j+1]
+                    input_dtype = GLOBAL_TFLITE_INPUT_DETAILS[0]["dtype"]
+                    if input_dtype == np.float32:
+                        input_data = sample.astype(np.float32)
+                    elif input_dtype == np.uint8:
+                        input_data = sample.astype(np.uint8)
+                    else:
+                        input_data = sample.astype(input_dtype)
+                    GLOBAL_TFLITE_INTERPRETER.set_tensor(GLOBAL_TFLITE_INPUT_DETAILS[0]["index"], input_data)
+                    GLOBAL_TFLITE_INTERPRETER.invoke()
+                    out = GLOBAL_TFLITE_INTERPRETER.get_tensor(GLOBAL_TFLITE_OUTPUT_DETAILS[0]["index"])
+                    y_pred_probs.append(float(out[0][0]))
+                    y_true.append(int(ybatch[j]))
 
-        # For TFLite interpreter, run evaluation sample-by-sample
-        y_pred_probs = []
-        y_true = []
-        # iterate over batches from generator
-        for i in range(len(test_gen)):
-            Xbatch, ybatch = test_gen[i]
-            # we need to feed each sample into interpreter
-            for j in range(Xbatch.shape[0]):
-                sample = Xbatch[j:j+1]  # shape (1,H,W,3)
-                # adapt dtype if necessary
-                input_dtype = GLOBAL_TFLITE_INPUT_DETAILS[0]["dtype"]
-                if input_dtype == np.float32:
-                    input_data = sample.astype(np.float32)
-                elif input_dtype == np.uint8:
-                    input_data = (sample).astype(np.uint8)
-                else:
-                    input_data = sample.astype(input_dtype)
-                GLOBAL_TFLITE_INTERPRETER.set_tensor(GLOBAL_TFLITE_INPUT_DETAILS[0]["index"], input_data)
-                GLOBAL_TFLITE_INTERPRETER.invoke()
-                out = GLOBAL_TFLITE_INTERPRETER.get_tensor(GLOBAL_TFLITE_OUTPUT_DETAILS[0]["index"])
-                prob = float(out[0][0])
-                y_pred_probs.append(prob)
-                y_true.append(int(ybatch[j]))
-        import numpy as _np
-        y_pred_probs = _np.array(y_pred_probs)
+        y_pred_probs = np.array(y_pred_probs)
         y_pred = (y_pred_probs > 0.5).astype(int).flatten()
-        y_true = _np.array(y_true)
+        y_true = np.array(y_true)
         precision = round(float(precision_score(y_true, y_pred)), 4)
         recall = round(float(recall_score(y_true, y_pred)), 4)
         auc = round(float(roc_auc_score(y_true, y_pred_probs)), 4)
-        accuracy = round(float(_np.mean(y_pred == y_true)), 4)
+        accuracy = round(float(np.mean(y_pred == y_true)), 4)
         loss = None
         return {"loss": loss, "accuracy": accuracy, "precision": precision, "recall": recall, "auc": auc}
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Model evaluation failed: {str(e)}")
 
@@ -582,5 +478,4 @@ def metrics(batch_size: int = 64):
 # Run app
 # -----------------------
 if __name__ == "__main__":
-    # when running locally from repo root, use: uvicorn src.api:app --host 0.0.0.0 --port 8000
     uvicorn.run("src.api:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), reload=False)

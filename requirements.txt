@@ -10,6 +10,6 @@ torchvision
 Pillow
 fastapi
 uvicorn
-tensorflow
+tensorflow-cpu
 python-multipart
 python-dotenv
