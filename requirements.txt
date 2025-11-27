@@ -5,11 +5,13 @@ opencv-python-headless
 matplotlib
 seaborn
 requests
-torch
-torchvision
-Pillow
+python-dotenv
 fastapi
 uvicorn
+torch
+torchvision
 tensorflow-cpu
+pillow
 python-multipart
 python-dotenv
+locust

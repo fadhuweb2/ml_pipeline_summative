@@ -140,15 +140,11 @@ if page == "🔍 Predict":
                         if r.status_code == 200:
                             result = r.json()
                             prediction = result.get('label', 'Unknown')
-                            confidence = result.get('confidence', 0)
                             
                             if prediction.lower() == "pneumonia":
                                 st.error("Pneumonia detected")
                             else:
                                 st.success("Normal")
-                            
-                            st.metric("Confidence", f"{confidence * 100:.2f} percent")
-                            st.progress(confidence)
                             
                             with st.expander("Raw Result"):
                                 st.json(result)
