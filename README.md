@@ -7,8 +7,7 @@ This project implements an end-to-end machine learning pipeline for detecting pn
 - **Data preprocessing:** Image augmentation and normalization  
 - **Model creation:** Convolutional Neural Network (CNN) with optional fine-tuning  
 - **Prediction:** Single image predictions via FastAPI  
-- **Retraining:** Upload new data and trigger retraining  
-- **Deployment:** Dockerized API with optional Streamlit frontend  
+- **Retraining:** Upload new data and trigger retraining    
 - **Performance testing:** Flood request simulation using Locust  
 
 The goal is to provide a user-friendly interface for both prediction and retraining while demonstrating robust performance under load.
@@ -28,9 +27,7 @@ The video demonstrates:
 
 ### Prerequisites
 
-- Python 3.10+  
-- Docker 
-- Pipenv or virtualenv (for Python environment)  
+- Python 3.10+
 
 ### Installation
 
